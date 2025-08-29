@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RJ KI PREDICTION</title>
+<style>
+  :root{--ylw:#ff0;--grn:#0f0;--red:#f33;--bdr:#333;}
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:18px 16px 60px;
+    font-family:Consolas, monospace;
+    color:#fff;
+    background: linear-gradient(-45deg,#ff0000,#00ff00,#0000ff,#ffff00,#ff00ff,#00ffff);
+    background-size:400% 400%;
+    animation: gradientShift 8s ease infinite;
+  }
+  @keyframes gradientShift{
+    0%{background-position:0% 50%}
+    50%{background-position:100% 50%}
+    100%{background-position:0% 50%}
+  }
+  h2{margin:0 0 12px;text-shadow:0 0 10px #000;}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .card{background:rgba(0,0,0,0.6);padding:12px 14px;border:2px solid var(--ylw);
+        border-radius:12px;min-width:420px;box-shadow:0 0 15px #000 inset}
+  #statsBox{border-color:var(--grn)}
+  #controls{border-color:#888}
+  #trendBox{border-color:#ff8800}
+  #last10Box{border-color:#09f}
+  .muted{color:#ccc}
+  .highlight{color:var(--ylw);font-weight:bold}
+  .win{color:var(--grn);font-weight:bold}
+  .loss{color:var(--red);font-weight:bold}
+  button{background:#000;color:#fff;border:1px solid #fff;
+         border-radius:10px;padding:6px 10px;cursor:pointer}
+  button:hover{filter:brightness(1.3)}
+  button:disabled{opacity:0.6;cursor:not-allowed}
+  #resultTable{margin-top:16px;width:100%;border-collapse:collapse;font-size:14px}
+  #resultTable th,#resultTable td{border:1px solid var(--bdr);
+               padding:6px 8px;text-align:center;vertical-align:middle;background:rgba(0,0,0,0.4)}
+  #resultTable thead th{position:sticky;top:0;background:#111}
+</style>
+</head>
+<body>
+<h2 id="mainHeading">💻 RJ KI PREDICTION — 30S</h2>
+<div class="row">
+  <div id="predictionBox" class="card"><b>Loading...</b></div>
+  <div id="trendBox" class="card"><b>Trend loading…</b></div>
+  <div id="statsBox" class="card"><b>Loading stats...</b></div>
+  <div id="last10Box" class="card"><b>Last 10 Results...</b></div>
+  <div id="controls" class="card">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="modeBtn" data-mode="30S">30 Sec</button>
+      <button class="modeBtn" data-mode="1M">1 Min</button>
+      <button class="modeBtn" data-mode="3M">3 Min</button>
+      <button class="modeBtn" data-mode="5M">5 Min</button>
+    </div>
+    <hr style="border:1px solid #fff;margin:8px 0">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button id="pauseBtn">Pause</button>
+      <button id="resumeBtn" disabled>Resume</button>
+      <button id="resetStatsBtn">Reset Stats</button>
+      <button id="clearTableBtn">Clear Table</button>
+      <button id="downloadExcelBtn">Download Excel</button>
+      <span class="muted" id="lastSync">Last sync: —</span>
+    </div>
+    <div style="margin-top:6px" class="muted" id="modeLabel">
+      🔍 Rule: Trend Prediction Only + Opposite Rule
+    </div>
+  </div>
+</div>
+
+<table id="resultTable" class="mono">
+  <thead>
+    <tr>
+      <th>#</th><th>Period</th>
+      <th>Prediction</th>
+      <th>Actual Number</th>
+      <th>Size Result</th><th>Color Result</th>
+      <th>When</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<script>
+(function(){
+let API_BASE='https://draw.ar-lottery01.com/WinGo';
+let GAME_MODE='30S';
+let API=`${API_BASE}/WinGo_${GAME_MODE}/GetHistoryIssuePage.json`;
+const REFRESH_MS=3000, MAX_ROWS=200; 
+let timer=null,lastPeriod=null,currentPrediction=null;
+
+let stats={
+  "30S":{winSize:0,lossSize:0,winColor:0,lossColor:0},
+  "1M":{winSize:0,lossSize:0,winColor:0,lossColor:0},
+  "3M":{winSize:0,lossSize:0,winColor:0,lossColor:0},
+  "5M":{winSize:0,lossSize:0,winColor:0,lossColor:0}
+};
+
+const heading=document.getElementById('mainHeading');
+const predictionBox=document.getElementById('predictionBox');
+const trendBox=document.getElementById('trendBox');
+const statsBox=document.getElementById('statsBox');
+const last10Box=document.getElementById('last10Box');
+const resultTableBody=document.querySelector('#resultTable tbody');
+const lastSyncEl=document.getElementById('lastSync');
+const pauseBtn=document.getElementById('pauseBtn');
+const resumeBtn=document.getElementById('resumeBtn');
+const resetStatsBtn=document.getElementById('resetStatsBtn');
+const clearTableBtn=document.getElementById('clearTableBtn');
+const downloadExcelBtn=document.getElementById('downloadExcelBtn');
+
+function getSize(n){return n>=5?'Big':'Small';}
+function getColor(n){return n%2===0?'Red':'Green';}
+
+function trendPrediction(results){
+  if(results.length<10) return null;
+  const last10=results.slice(0,10);
+  const last5=results.slice(0,5);
+  const big10=last10.filter(n=>n>=5).length;
+  const big5=last5.filter(n=>n>=5).length;
+  const red10=last10.filter(n=>n%2===0).length;
+  const red5=last5.filter(n=>n%2===0).length;
+
+  let sizePred= big5>=big10/2 ? "Big":"Small";
+  let colorPred= red5>=red10/2 ? "Red":"Green";
+
+  const bigPerc10=(big10/10)*100;
+  const bigPerc5=(big5/5)*100;
+  const redPerc10=(red10/10)*100;
+  const redPerc5=(red5/5)*100;
+
+  if(Math.abs(bigPerc10-bigPerc5)===0 || bigPerc10-bigPerc5>=10){ sizePred=(sizePred==="Big"?"Small":"Big"); }
+  if(Math.abs(redPerc10-redPerc5)===0 || redPerc10-redPerc5>=10){ colorPred=(colorPred==="Red"?"Green":"Red"); }
+
+  return {nextSize:sizePred,nextColor:colorPred,bigPerc10,bigPerc5,redPerc10,redPerc5};
+}
+
+function renderTrend(pred){
+  if(!pred){ trendBox.innerHTML='<b>Insufficient data</b>'; return; }
+  trendBox.innerHTML=`
+    <b>📊 Trend</b><br>
+    Size → 10: ${pred.bigPerc10.toFixed(1)}% • 5: ${pred.bigPerc5.toFixed(1)}% → 
+    <span class="highlight">${pred.nextSize}</span><br>
+    Color → 10: ${pred.redPerc10.toFixed(1)}% • 5: ${pred.redPerc5.toFixed(1)}% → 
+    <span class="highlight">${pred.nextColor}</span>
+  `;
+}
+
+function renderLast10(results){
+  if(!results.length){last10Box.innerHTML="<b>No data</b>";return;}
+  let html="<b>Last 10 Results</b><br>";
+  results.slice(0,10).forEach(n=>{
+    html+=`${n} (${getSize(n)}, ${getColor(n)})<br>`;
+  });
+  last10Box.innerHTML=html;
+}
+
+function addRow({period,predText,actualNum,wasSizeWin,wasColorWin}){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td>${resultTableBody.rows.length+1}</td>
+    <td>${period}</td>
+    <td>${predText}</td>
+    <td>${actualNum}</td>
+    <td class="${wasSizeWin?'win':'loss'}">${wasSizeWin?'Win':'Loss'}</td>
+    <td class="${wasColorWin?'win':'loss'}">${wasColorWin?'Win':'Loss'}</td>
+    <td>${new Date().toLocaleTimeString()}</td>`;
+  resultTableBody.insertBefore(tr,resultTableBody.firstChild);
+  while(resultTableBody.rows.length>MAX_ROWS)resultTableBody.deleteRow(resultTableBody.rows.length-1);
+  saveHistory();
+}
+
+async function fetchResults(){
+  const res=await fetch(`${API}?ts=${Date.now()}`,{cache:'no-store'});
+  const json=await res.json();
+  const list=json?.data?.list||[];
+  const results=list.slice(0,100).map(r=>parseInt(r.number,10)).filter(Number.isFinite);
+  const latestPeriod=String(list[0]?.issueNumber??list[0]?.issue??'');
+  return {results,latestPeriod};
+}
+
+async function tick(){
+  try{
+    const {results,latestPeriod}=await fetchResults();
+    lastSyncEl.textContent='Last sync: '+new Date().toLocaleTimeString();
+    if(!results.length) return;
+
+    const trendPred=trendPrediction(results);
+
+    if(latestPeriod!==lastPeriod){
+      const actualNum = results[0];
+      if(currentPrediction && lastPeriod){
+        const actualSize = getSize(actualNum);
+        const actualColor = getColor(actualNum);
+        const wasSizeWin = (currentPrediction.size === actualSize);
+        const wasColorWin = (currentPrediction.color === actualColor);
+
+        if(wasSizeWin) stats[GAME_MODE].winSize++; else stats[GAME_MODE].lossSize++;
+        if(wasColorWin) stats[GAME_MODE].winColor++; else stats[GAME_MODE].lossColor++;
+
+        addRow({
+          period:lastPeriod,
+          predText:`${currentPrediction.size} | ${currentPrediction.color}`,
+          actualNum,wasSizeWin,wasColorWin
+        });
+      }
+
+      if(trendPred){
+        predictionBox.innerHTML=`<b class="win">Next Prediction → Size: ${trendPred.nextSize} | Color: ${trendPred.nextColor}</b>`;
+        currentPrediction={size:trendPred.nextSize,color:trendPred.nextColor};
+        renderTrend(trendPred);
+      }
+      renderLast10(results);
+      lastPeriod=latestPeriod;
+    } else {
+      if(trendPred) renderTrend(trendPred);
+      renderLast10(results);
+    }
+
+    let s=stats[GAME_MODE];
+    statsBox.innerHTML=`<b>Size →</b> W:${s.winSize} / L:${s.lossSize}<br>
+                        <b>Color →</b> W:${s.winColor} / L:${s.lossColor}`;
+  }catch(e){
+    predictionBox.innerHTML=`<b style="color:red">Error</b> (${e.message})`;
+  }
+}
+
+function start(){if(!timer)timer=setInterval(tick,REFRESH_MS);}
+function stop(){if(timer){clearInterval(timer);timer=null;}}
+
+function loadHistory(){
+  let key=`rjHistory_${GAME_MODE}`;
+  resultTableBody.innerHTML=localStorage[key]||'';
+}
+function saveHistory(){
+  let key=`rjHistory_${GAME_MODE}`;
+  localStorage[key]=resultTableBody.innerHTML;
+}
+
+pauseBtn.onclick=()=>{stop();pauseBtn.disabled=true;resumeBtn.disabled=false;};
+resumeBtn.onclick=()=>{start();resumeBtn.disabled=true;pauseBtn.disabled=false;tick();};
+resetStatsBtn.onclick=()=>{stats[GAME_MODE]={winSize:0,lossSize:0,winColor:0,lossColor:0};statsBox.innerHTML='Reset!';};
+clearTableBtn.onclick=()=>{resultTableBody.innerHTML='';saveHistory();};
+
+downloadExcelBtn.onclick=()=>{
+  try{
+    const table=document.getElementById("resultTable");
+    const cloneTable=table.cloneNode(true);
+    const tbody=cloneTable.querySelector("tbody");
+    while(tbody.rows.length>100){tbody.deleteRow(100);}
+    const ws=XLSX.utils.table_to_sheet(cloneTable);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"Results");
+    const filename=`RJ_Results_${(new Date()).toISOString().replace(/[:.]/g,'-')}.xlsx`;
+    XLSX.writeFile(wb,filename);
+  }catch(err){alert("Export failed: "+err.message);}
+};
+
+document.querySelectorAll(".modeBtn").forEach(btn=>{
+  btn.onclick=()=>{
+    stop();
+    GAME_MODE=btn.dataset.mode;
+    API=`${API_BASE}/WinGo_${GAME_MODE}/GetHistoryIssuePage.json`;
+    heading.textContent=`💻 RJ KI PREDICTION — ${GAME_MODE}`;
+    lastPeriod=null;
+    loadHistory();
+    predictionBox.innerHTML="<b>Loading...</b>";
+    trendBox.innerHTML="<b>Trend loading…</b>";
+    tick();
+    start();
+  };
+});
+
+loadHistory();
+tick();
+start();
+})();
+</script>
+</body>
+</html>
